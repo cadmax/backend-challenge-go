@@ -1,0 +1,9 @@
+.git
+.omx
+.env
+.env.*
+!.env.example
+bin
+coverage*
+*.out
+.DS_Store

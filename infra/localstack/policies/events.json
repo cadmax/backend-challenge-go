@@ -1,0 +1,9 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "ConsumeFinancialEvents",
+    "Effect": "Allow",
+    "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueUrl", "sqs:GetQueueAttributes"],
+    "Resource": "arn:aws:sqs:us-east-1:000000000000:wager-events.fifo"
+  }]
+}
