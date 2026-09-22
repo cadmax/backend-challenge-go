@@ -8,7 +8,7 @@ LocalStack `4567` para evitar colisões comuns com ambientes já existentes.
 Os nomes e portas internos da rede Docker continuam `postgres:5432`,
 `keycloak:8080` e `localstack:4566`.
 
-As imagens têm versões fixas: Go 1.26.1, Alpine 3.22.1, PostgreSQL 17.6,
+As imagens têm versões fixas: Go 1.26.7, Alpine 3.22.1, PostgreSQL 17.6,
 Keycloak 26.3.3 e LocalStack 4.7.0. O contêiner da aplicação executa como UID
 10001, sem capabilities, com filesystem somente leitura. Migrations usam
 `wager_owner`; a aplicação usa `wager`, sem superuser ou permissão de DDL.
