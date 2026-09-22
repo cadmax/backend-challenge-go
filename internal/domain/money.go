@@ -2,6 +2,7 @@ package domain
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,13 +141,7 @@ func (m Money) Compare(other Money) (int, error) {
 	if err := m.compatible(other); err != nil {
 		return 0, err
 	}
-	if m.minor < other.minor {
-		return -1, nil
-	}
-	if m.minor > other.minor {
-		return 1, nil
-	}
-	return 0, nil
+	return cmp.Compare(m.minor, other.minor), nil
 }
 
 func (m Money) Amount() string {
