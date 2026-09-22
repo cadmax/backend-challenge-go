@@ -18,7 +18,7 @@ func (w *Workers) publish(pollCtx, workCtx context.Context) {
 		cancel()
 		if err != nil {
 			w.log.Warn("outbox publication deferred", "error", err)
-			w.metrics.Inc("retries_total{worker=\"outbox\"}")
+			w.metrics.Retry("outbox")
 		}
 		if err != nil || !found {
 			if !wait(pollCtx, w.cfg.OutboxPoll) {
@@ -95,7 +95,7 @@ func (w *Workers) publishOne(ctx context.Context) (bool, error) {
 	if err = tx.Commit(ctx); err != nil {
 		return true, err
 	}
-	w.metrics.Inc("outbox_published_total")
+	w.metrics.OutboxPublished()
 	w.log.Info("event published", "eventId", eventID, "aggregateId", aggregateID)
 	return true, nil
 }

@@ -31,7 +31,7 @@ func (w *Workers) consume(pollCtx, workCtx context.Context) {
 			if pollCtx.Err() != nil {
 				return
 			}
-			w.metrics.Inc("retries_total{worker=\"consumer_poll\"}")
+			w.metrics.Retry("consumer_poll")
 			w.log.Warn("SQS receive failed", "error", err)
 			if !wait(pollCtx, time.Second) {
 				return
@@ -64,9 +64,9 @@ func (w *Workers) handleMessage(workCtx context.Context, message types.Message) 
 	if err != nil {
 		attempt, _ := strconv.Atoi(message.Attributes["ApproximateReceiveCount"])
 		w.metrics.StorageError(err)
-		w.metrics.Inc("retries_total{worker=\"consumer\"}")
+		w.metrics.Retry("consumer")
 		if errors.Is(err, application.ErrConflict) {
-			w.metrics.Inc("conflicts_total{kind=\"inbox\"}")
+			w.metrics.Conflict("inbox")
 		}
 		// Invalid envelopes are never acknowledged: the broker's redrive policy
 		// retains the original bytes for diagnosis in the DLQ.
@@ -110,7 +110,7 @@ func (w *Workers) handleMessage(workCtx context.Context, message types.Message) 
 		QueueUrl:      aws.String(w.queue.InputURL),
 		ReceiptHandle: message.ReceiptHandle,
 	}); err != nil {
-		w.metrics.Inc("retries_total{worker=\"ack\"}")
+		w.metrics.Retry("ack")
 		w.log.Warn("message committed but acknowledgement failed", "messageId", envelope.MessageID, "error", err)
 	}
 }

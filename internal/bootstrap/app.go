@@ -182,10 +182,10 @@ func (s *observedService) Process(ctx context.Context, command application.Comma
 		s.metrics.Result(result.Status, result.IdempotentReplay)
 	}
 	if errors.Is(err, application.ErrConflict) {
-		s.metrics.Inc("conflicts_total{kind=\"identity\"}")
+		s.metrics.Conflict("identity")
 	}
 	if errors.Is(err, application.ErrUnavailable) {
-		s.metrics.Inc("storage_failures_total")
+		s.metrics.StorageFailure()
 	}
 	return result, err
 }
@@ -193,7 +193,7 @@ func (s *observedService) Process(ctx context.Context, command application.Comma
 func (s *observedService) Reconcile(ctx context.Context, id string) (application.Reconciliation, error) {
 	result, err := s.Service.Reconcile(ctx, id)
 	if err == nil && !result.Consistent {
-		s.metrics.Inc("reconciliation_divergences_total")
+		s.metrics.ReconciliationDivergence()
 	}
 	return result, err
 }

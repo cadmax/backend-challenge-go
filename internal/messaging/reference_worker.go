@@ -8,7 +8,7 @@ func (w *Workers) references(pollCtx, workCtx context.Context) {
 		count, err := w.service.ResumePending(ctx)
 		cancel()
 		if err != nil {
-			w.metrics.Inc("retries_total{worker=\"references\"}")
+			w.metrics.Retry("references")
 			w.metrics.StorageError(err)
 			w.log.Warn("reference retry deferred", "error", err)
 		} else if count > 0 {

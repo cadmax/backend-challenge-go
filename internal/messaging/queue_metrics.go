@@ -20,7 +20,7 @@ func (w *Workers) queueMetrics(ctx context.Context) {
 			WHERE published_at IS NULL
 		`).Scan(&lag)
 		if err == nil {
-			w.metrics.Gauge("outbox_oldest_pending_seconds", max(0, lag))
+			w.metrics.OutboxLag(max(0, lag))
 		}
 		out, err := w.queue.Client.GetQueueAttributes(queryCtx, &sqs.GetQueueAttributesInput{
 			QueueUrl: aws.String(w.queue.DLQURL),
@@ -30,7 +30,7 @@ func (w *Workers) queueMetrics(ctx context.Context) {
 		})
 		if err == nil {
 			count, _ := strconv.ParseInt(out.Attributes["ApproximateNumberOfMessages"], 10, 64)
-			w.metrics.Gauge("dlq_messages", count)
+			w.metrics.DLQDepth(count)
 		}
 		cancel()
 		if !wait(ctx, 5*time.Second) {
