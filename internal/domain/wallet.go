@@ -41,9 +41,16 @@ func RestoreWallet(state WalletSnapshot) (*Wallet, error) {
 }
 
 func (s WalletSnapshot) Validate() error {
-	if !validIdentifier(s.ID) || !validIdentifier(s.PlayerID) ||
-		s.Balance.Validate() != nil || s.Balance.MinorUnits() < 0 || s.Version < 1 ||
-		s.CreatedAt.IsZero() || s.UpdatedAt.Before(s.CreatedAt) {
+	if !validIdentifier(s.ID) || !validIdentifier(s.PlayerID) {
+		return ErrInvalidWallet
+	}
+	if s.Balance.Validate() != nil || s.Balance.MinorUnits() < 0 {
+		return ErrInvalidWallet
+	}
+	if s.Version < 1 {
+		return ErrInvalidWallet
+	}
+	if s.CreatedAt.IsZero() || s.UpdatedAt.Before(s.CreatedAt) {
 		return ErrInvalidWallet
 	}
 	return nil
@@ -65,7 +72,10 @@ func (w *Wallet) Credit(money Money, at time.Time) error {
 }
 
 func (w *Wallet) change(money Money, at time.Time, debit bool) error {
-	if w == nil || w.state.Validate() != nil || at.IsZero() || at.Before(w.state.UpdatedAt) {
+	if w == nil || w.state.Validate() != nil {
+		return ErrInvalidWallet
+	}
+	if at.IsZero() || at.Before(w.state.UpdatedAt) {
 		return ErrInvalidWallet
 	}
 	if err := money.Validate(); err != nil {

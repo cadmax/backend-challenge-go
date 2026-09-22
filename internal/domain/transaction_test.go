@@ -264,6 +264,28 @@ func assertRuleCode(t testing.TB, err error, code string) {
 	}
 }
 
+func TestRuleErrorsMatchOnlyTheirSentinel(t *testing.T) {
+	for _, test := range []struct {
+		code string
+		want error
+	}{
+		{domain.CodeInsufficientFunds, domain.ErrInsufficientFunds},
+		{domain.CodeReversalInsufficientFunds, domain.ErrInsufficientFunds},
+		{domain.CodeCurrencyMismatch, domain.ErrCurrencyMismatch},
+		{domain.CodeBalanceOverflow, domain.ErrOverflow},
+		{domain.CodeReferenceMismatch, nil},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			err := &domain.RuleError{Code: test.code}
+			for _, target := range []error{domain.ErrInsufficientFunds, domain.ErrCurrencyMismatch, domain.ErrOverflow, domain.ErrInvalidTransaction} {
+				if got := errors.Is(err, target); got != (target == test.want) {
+					t.Fatalf("errors.Is(%s, %v) = %v", test.code, target, got)
+				}
+			}
+		})
+	}
+}
+
 func TestReferenceIdentityAndStateRules(t *testing.T) {
 	tx, w := wager(t, domain.Refund, "25"), wallet(t, "100").Snapshot()
 	if _, err := tx.Evaluate(w, nil, false); !errors.Is(err, domain.ErrReferencePending) {

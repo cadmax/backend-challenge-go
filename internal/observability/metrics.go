@@ -46,7 +46,12 @@ func (m *Metrics) StorageError(err error) {
 }
 
 // Keys are selected by application code, never interpolated from provider input.
-func (m *Metrics) Inc(key string) { m.mu.Lock(); defer m.mu.Unlock(); m.counters[key]++ }
+func (m *Metrics) Inc(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counters[key]++
+}
+
 func (m *Metrics) Gauge(key string, value int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

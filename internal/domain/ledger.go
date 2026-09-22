@@ -34,10 +34,19 @@ func NewLedgerEntry(id, walletID, transactionID string, direction Direction, mon
 func (e WalletLedgerEntry) Snapshot() LedgerSnapshot { return e.state }
 
 func (s LedgerSnapshot) Validate() error {
-	if !validIdentifier(s.ID) || !validIdentifier(s.WalletID) || !validIdentifier(s.TransactionID) ||
-		s.Money.Validate() != nil || s.Money.MinorUnits() <= 0 || s.BalanceBefore.Validate() != nil ||
-		s.BalanceAfter.Validate() != nil || s.BalanceBefore.MinorUnits() < 0 || s.BalanceAfter.MinorUnits() < 0 ||
-		s.CreatedAt.IsZero() {
+	if !validIdentifier(s.ID) || !validIdentifier(s.WalletID) || !validIdentifier(s.TransactionID) {
+		return ErrInvalidLedger
+	}
+	if s.Money.Validate() != nil || s.Money.MinorUnits() <= 0 {
+		return ErrInvalidLedger
+	}
+	if s.BalanceBefore.Validate() != nil || s.BalanceAfter.Validate() != nil {
+		return ErrInvalidLedger
+	}
+	if s.BalanceBefore.MinorUnits() < 0 || s.BalanceAfter.MinorUnits() < 0 {
+		return ErrInvalidLedger
+	}
+	if s.CreatedAt.IsZero() {
 		return ErrInvalidLedger
 	}
 	var expected Money

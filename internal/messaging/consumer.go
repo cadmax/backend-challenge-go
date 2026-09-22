@@ -141,9 +141,13 @@ func decodeEnvelope(body string) (application.Envelope, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return envelope, errors.New("message must contain one JSON object")
 	}
-	if envelope.MessageID == "" || len(envelope.MessageID) > 200 ||
-		envelope.OccurredAt.IsZero() || envelope.Type != "WagerTransactionRequested" ||
-		envelope.Data.IdempotencyKey == "" {
+	if envelope.MessageID == "" || len(envelope.MessageID) > 200 {
+		return envelope, errors.New("missing or invalid message metadata")
+	}
+	if envelope.OccurredAt.IsZero() || envelope.Type != "WagerTransactionRequested" {
+		return envelope, errors.New("missing or invalid message metadata")
+	}
+	if envelope.Data.IdempotencyKey == "" {
 		return envelope, errors.New("missing or invalid message metadata")
 	}
 	return envelope, nil

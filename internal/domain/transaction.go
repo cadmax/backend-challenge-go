@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -19,6 +20,8 @@ const (
 	Rollback Kind = "ROLLBACK"
 )
 
+var rollbackReferenceKinds = []Kind{Bet, Win, Refund}
+
 type Status string
 
 const (
@@ -28,6 +31,15 @@ const (
 	Rejected         Status = "REJECTED"
 	Failed           Status = "FAILED"
 )
+
+func (s Status) isPending() bool {
+	switch s {
+	case Pending, PendingReference:
+		return true
+	default:
+		return false
+	}
+}
 
 type Direction string
 
@@ -62,10 +74,16 @@ type RuleError struct{ Code string }
 func (e *RuleError) Error() string { return e.Code }
 
 func (e *RuleError) Is(target error) bool {
-	return (target == ErrInsufficientFunds &&
-		(e.Code == CodeInsufficientFunds || e.Code == CodeReversalInsufficientFunds)) ||
-		(target == ErrCurrencyMismatch && e.Code == CodeCurrencyMismatch) ||
-		(target == ErrOverflow && e.Code == CodeBalanceOverflow)
+	switch target {
+	case ErrInsufficientFunds:
+		return e.Code == CodeInsufficientFunds || e.Code == CodeReversalInsufficientFunds
+	case ErrCurrencyMismatch:
+		return e.Code == CodeCurrencyMismatch
+	case ErrOverflow:
+		return e.Code == CodeBalanceOverflow
+	default:
+		return false
+	}
 }
 
 type WagerInput struct {
@@ -147,12 +165,16 @@ func (s TransactionSnapshot) Validate() error {
 			return ErrInvalidTransaction
 		}
 	case Processed:
-		if s.FailureCode != "" || s.ResultBalance == nil ||
-			(s.ReferenceExternalTransactionID != "" && s.ReferenceTransactionID == "") {
+		if s.FailureCode != "" || s.ResultBalance == nil {
 			return ErrInvalidTransaction
 		}
-		if s.ResultBalance.Currency() != s.Money.Currency() ||
-			(s.Kind == Opening && s.ResultBalance.MinorUnits() != s.Money.MinorUnits()) {
+		if s.ReferenceExternalTransactionID != "" && s.ReferenceTransactionID == "" {
+			return ErrInvalidTransaction
+		}
+		if s.ResultBalance.Currency() != s.Money.Currency() {
+			return ErrInvalidTransaction
+		}
+		if s.Kind == Opening && s.ResultBalance.MinorUnits() != s.Money.MinorUnits() {
 			return ErrInvalidTransaction
 		}
 	case Rejected, Failed:
@@ -166,21 +188,36 @@ func (s TransactionSnapshot) Validate() error {
 }
 
 func validateWagerInput(input WagerInput) error {
-	if !validIdentifier(input.ID) || !validIdentifier(input.WalletID) || !validIdentifier(input.PlayerID) ||
-		input.Money.Validate() != nil || input.Money.MinorUnits() < 0 {
+	if !validIdentifier(input.ID) || !validIdentifier(input.WalletID) || !validIdentifier(input.PlayerID) {
+		return ErrInvalidTransaction
+	}
+	if input.Money.Validate() != nil || input.Money.MinorUnits() < 0 {
 		return ErrInvalidTransaction
 	}
 	if input.Kind == Opening {
-		if input.Money.MinorUnits() == 0 || input.ProviderID != "" || input.ExternalTransactionID != "" ||
-			input.IdempotencyKey != "" || input.PayloadHash != "" || input.RoundID != "" ||
-			input.GameID != "" || input.ReferenceExternalTransactionID != "" {
+		if input.Money.MinorUnits() == 0 {
 			return ErrInvalidTransaction
+		}
+		externalMetadata := []string{
+			input.ProviderID, input.ExternalTransactionID, input.IdempotencyKey,
+			input.PayloadHash, input.RoundID, input.GameID, input.ReferenceExternalTransactionID,
+		}
+		for _, value := range externalMetadata {
+			if value != "" {
+				return ErrInvalidTransaction
+			}
 		}
 		return nil
 	}
-	if !validIdentifier(input.ProviderID) || !validIdentifier(input.ExternalTransactionID) ||
-		!validIdentifier(input.IdempotencyKey) || !validIdentifier(input.RoundID) || !validIdentifier(input.GameID) ||
-		!validHash(input.PayloadHash) {
+	externalIdentifiers := []string{
+		input.ProviderID, input.ExternalTransactionID, input.IdempotencyKey, input.RoundID, input.GameID,
+	}
+	for _, identifier := range externalIdentifiers {
+		if !validIdentifier(identifier) {
+			return ErrInvalidTransaction
+		}
+	}
+	if !validHash(input.PayloadHash) {
 		return ErrInvalidTransaction
 	}
 	if input.ReferenceExternalTransactionID != "" &&
@@ -249,7 +286,10 @@ func (t *WagerTransaction) canTransition(at time.Time) error {
 	if t == nil || t.state.Validate() != nil {
 		return ErrInvalidTransaction
 	}
-	if (t.state.Status != Pending && t.state.Status != PendingReference) || at.IsZero() || at.Before(t.state.UpdatedAt) {
+	if !t.state.Status.isPending() {
+		return ErrInvalidTransition
+	}
+	if at.IsZero() || at.Before(t.state.UpdatedAt) {
 		return ErrInvalidTransition
 	}
 	return nil
@@ -319,7 +359,7 @@ func (t *WagerTransaction) Evaluate(wallet WalletSnapshot, reference *Transactio
 	if t == nil || t.state.Validate() != nil {
 		return Movement{}, ErrInvalidTransaction
 	}
-	if t.state.Status != Pending && t.state.Status != PendingReference {
+	if !t.state.Status.isPending() {
 		return Movement{}, ErrInvalidTransition
 	}
 	if err := wallet.Validate(); err != nil {
@@ -339,12 +379,16 @@ func (t *WagerTransaction) Evaluate(wallet WalletSnapshot, reference *Transactio
 		if err := reference.Validate(); err != nil {
 			return Movement{}, err
 		}
-		if reference.ProviderID != s.ProviderID || reference.ExternalTransactionID != s.ReferenceExternalTransactionID ||
-			reference.PlayerID != s.PlayerID || reference.WalletID != s.WalletID ||
-			reference.RoundID != s.RoundID || reference.Money.Currency() != s.Money.Currency() {
+		if reference.ProviderID != s.ProviderID || reference.ExternalTransactionID != s.ReferenceExternalTransactionID {
 			return Movement{}, &RuleError{Code: CodeReferenceMismatch}
 		}
-		if reference.Status == Pending || reference.Status == PendingReference {
+		if reference.PlayerID != s.PlayerID || reference.WalletID != s.WalletID {
+			return Movement{}, &RuleError{Code: CodeReferenceMismatch}
+		}
+		if reference.RoundID != s.RoundID || reference.Money.Currency() != s.Money.Currency() {
+			return Movement{}, &RuleError{Code: CodeReferenceMismatch}
+		}
+		if reference.Status.isPending() {
 			return Movement{}, ErrReferencePending
 		}
 		if reference.Status != Processed {
@@ -353,7 +397,7 @@ func (t *WagerTransaction) Evaluate(wallet WalletSnapshot, reference *Transactio
 		if (s.Kind == Win || s.Kind == Refund) && reference.Kind != Bet {
 			return Movement{}, &RuleError{Code: CodeInvalidReferenceKind}
 		}
-		if s.Kind == Rollback && reference.Kind != Bet && reference.Kind != Win && reference.Kind != Refund {
+		if s.Kind == Rollback && !slices.Contains(rollbackReferenceKinds, reference.Kind) {
 			return Movement{}, &RuleError{Code: CodeInvalidReferenceKind}
 		}
 		if s.Kind == Refund || s.Kind == Rollback {

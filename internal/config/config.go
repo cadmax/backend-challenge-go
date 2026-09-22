@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 )
+
+var supportedTestFailpoints = []string{"after_inbox_commit", "after_outbox_send"}
 
 type Config struct {
 	HTTPAddr, DatabaseURL                    string
@@ -96,7 +99,12 @@ func Load() (Config, error) {
 			continue
 		}
 		u, err := url.Parse(item.value)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s must be an HTTP(S) URL without credentials", item.name))
+			continue
+		}
+		isHTTP := u.Scheme == "http" || u.Scheme == "https"
+		if u.Host == "" || !isHTTP || u.User != nil {
 			errs = append(errs, fmt.Errorf("%s must be an HTTP(S) URL without credentials", item.name))
 		}
 	}
@@ -109,7 +117,7 @@ func Load() (Config, error) {
 	if c.TestFailpoint != "" && !c.EnableTestFailpoints {
 		errs = append(errs, errors.New("TEST_FAILPOINT requires ENABLE_TEST_FAILPOINTS=true"))
 	}
-	if c.TestFailpoint != "" && c.TestFailpoint != "after_inbox_commit" && c.TestFailpoint != "after_outbox_send" {
+	if c.TestFailpoint != "" && !slices.Contains(supportedTestFailpoints, c.TestFailpoint) {
 		errs = append(errs, errors.New("unknown TEST_FAILPOINT"))
 	}
 	return c, errors.Join(errs...)

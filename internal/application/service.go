@@ -221,7 +221,10 @@ func (s *Service) Process(ctx context.Context, command Command, meta Metadata) (
 }
 
 func (s *Service) ProcessInbox(ctx context.Context, envelope Envelope, meta Metadata) (Result, error) {
-	if strings.TrimSpace(envelope.MessageID) == "" || len(envelope.MessageID) > 255 || envelope.Type != "WagerTransactionRequested" || envelope.OccurredAt.IsZero() {
+	if strings.TrimSpace(envelope.MessageID) == "" || len(envelope.MessageID) > 255 {
+		return Result{}, fmt.Errorf("%w: invalid message envelope", ErrInvalidInput)
+	}
+	if envelope.Type != "WagerTransactionRequested" || envelope.OccurredAt.IsZero() {
 		return Result{}, fmt.Errorf("%w: invalid message envelope", ErrInvalidInput)
 	}
 	if meta.CausationID == "" {
@@ -469,7 +472,10 @@ func (s *Service) ResumePending(ctx context.Context) (int, error) {
 				return nil
 			}
 			now := time.Now().UTC()
-			if (record.Transaction.Status != domain.Pending && record.Transaction.Status != domain.PendingReference) || record.NextAttemptAt.After(now) {
+			if record.Transaction.Status != domain.Pending && record.Transaction.Status != domain.PendingReference {
+				return nil
+			}
+			if record.NextAttemptAt.After(now) {
 				return nil
 			}
 			wallet, err := unitOfWork.GetAvailableWallet(ctx, record.Transaction.WalletID)

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,12 +33,7 @@ type Principal struct {
 }
 
 func (p Principal) HasRole(role string) bool {
-	for _, assigned := range p.Roles {
-		if assigned == role {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.Roles, role)
 }
 
 type Verifier struct {
@@ -53,7 +49,13 @@ type Verifier struct {
 func New(ctx context.Context, issuer, audience, jwksURL string) (*Verifier, error) {
 	for name, value := range map[string]string{"issuer": issuer, "JWKS URL": jwksURL} {
 		u, err := url.Parse(value)
-		if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
+		if err != nil || u == nil {
+			return nil, fmt.Errorf("invalid OIDC %s", name)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return nil, fmt.Errorf("invalid OIDC %s", name)
+		}
+		if u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
 			return nil, fmt.Errorf("invalid OIDC %s", name)
 		}
 	}
@@ -109,7 +111,13 @@ func (v *Verifier) Ready(ctx context.Context) error {
 		return errors.New("invalid JWKS response")
 	}
 	for _, key := range keys.Keys {
-		if key.Type != "RSA" || (key.Algorithm != "" && key.Algorithm != "RS256") || (key.Use != "" && key.Use != "sig") {
+		if key.Type != "RSA" {
+			continue
+		}
+		if key.Algorithm != "" && key.Algorithm != "RS256" {
+			continue
+		}
+		if key.Use != "" && key.Use != "sig" {
 			continue
 		}
 		n, nErr := base64.RawURLEncoding.DecodeString(key.Modulus)

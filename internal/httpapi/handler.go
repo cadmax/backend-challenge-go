@@ -371,7 +371,10 @@ func validCorrelationID(value string) bool {
 		return false
 	}
 	for _, ch := range value {
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || strings.ContainsRune("-_.:", ch)) {
+		isLetter := (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+		isDigit := ch >= '0' && ch <= '9'
+		isSeparator := strings.ContainsRune("-_.:", ch)
+		if !isLetter && !isDigit && !isSeparator {
 			return false
 		}
 	}

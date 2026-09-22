@@ -22,3 +22,27 @@ func TestConfigurationValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestFailpointNames(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/test")
+	t.Setenv("OIDC_ISSUER_URL", "http://localhost:8081/realms/jungle")
+	t.Setenv("ENABLE_TEST_FAILPOINTS", "true")
+	for _, test := range []struct {
+		name  string
+		valid bool
+	}{
+		{"", true},
+		{"after_inbox_commit", true},
+		{"after_outbox_send", true},
+		{"after_inbox", false},
+		{"after_inbox_commit ", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TEST_FAILPOINT", test.name)
+			_, err := Load()
+			if (err == nil) != test.valid {
+				t.Fatalf("failpoint %q: %v", test.name, err)
+			}
+		})
+	}
+}

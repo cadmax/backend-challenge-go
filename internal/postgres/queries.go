@@ -71,7 +71,10 @@ func (s *Store) Ledger(ctx context.Context, id, encoded string, limit int) (appl
 		if err != nil {
 			return page, application.ErrInvalidInput
 		}
-		if err := json.Unmarshal(cursorJSON, &cursor); err != nil || cursor.WalletID != id || cursor.CreatedAt.IsZero() || len(cursor.ID) != 36 {
+		if err := json.Unmarshal(cursorJSON, &cursor); err != nil {
+			return page, application.ErrInvalidInput
+		}
+		if cursor.WalletID != id || cursor.CreatedAt.IsZero() || len(cursor.ID) != 36 {
 			return page, application.ErrInvalidInput
 		}
 		var uuid pgtype.UUID

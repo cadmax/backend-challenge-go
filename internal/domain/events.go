@@ -89,9 +89,13 @@ func (e event[T]) MarshalJSON() ([]byte, error) {
 }
 
 func validateEventMetadata(meta EventMetadata, aggregateID string) error {
-	if !validIdentifier(meta.EventID) || !validIdentifier(meta.CorrelationID) ||
-		!validIdentifier(aggregateID) || meta.OccurredAt.IsZero() ||
-		(meta.CausationID != "" && !validIdentifier(meta.CausationID)) {
+	if !validIdentifier(meta.EventID) || !validIdentifier(meta.CorrelationID) || !validIdentifier(aggregateID) {
+		return ErrInvalidEvent
+	}
+	if meta.OccurredAt.IsZero() {
+		return ErrInvalidEvent
+	}
+	if meta.CausationID != "" && !validIdentifier(meta.CausationID) {
 		return ErrInvalidEvent
 	}
 	return nil
