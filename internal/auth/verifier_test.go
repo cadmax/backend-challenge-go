@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -197,6 +198,50 @@ func TestReadyRequiresUsableJWKS(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+}
+
+func TestReadyPreservesSigningKeyPolicyForMixedJWKS(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := publicJWK(key, "active")
+	changed := func(field, value string) map[string]string {
+		candidate := maps.Clone(valid)
+		candidate[field] = value
+		return candidate
+	}
+	for _, tt := range []struct {
+		name  string
+		keys  []map[string]string
+		ready bool
+	}{
+		{"optional algorithm", []map[string]string{changed("alg", "")}, true},
+		{"optional use", []map[string]string{changed("use", "")}, true},
+		{"wrong algorithm", []map[string]string{changed("alg", "RS512")}, false},
+		{"encryption key", []map[string]string{changed("use", "enc")}, false},
+		{"small modulus", []map[string]string{changed("n", "AQAB")}, false},
+		{"missing modulus", []map[string]string{changed("n", "")}, false},
+		{"missing exponent", []map[string]string{changed("e", "")}, false},
+		{"invalid base64", []map[string]string{changed("n", "*")}, false},
+		{"unsupported key before valid key", []map[string]string{{"kty": "future"}, valid}, true},
+		{"malformed key before valid key", []map[string]string{changed("n", "*"), valid}, true},
+		{"unusable key after valid key", []map[string]string{valid, changed("use", "enc")}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"keys": tt.keys})
+			}))
+			defer server.Close()
+			verifier, err := New(context.Background(), "https://issuer.example", "api", server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifier.Ready(context.Background()); (err == nil) != tt.ready {
+				t.Fatalf("ready error=%v, want ready=%v", err, tt.ready)
+			}
+		})
+	}
 }
 
 func publicJWK(key *rsa.PrivateKey, id string) map[string]string {

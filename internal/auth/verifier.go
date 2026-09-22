@@ -3,7 +3,7 @@ package auth
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/go-jose/go-jose/v4"
 )
 
 const (
@@ -99,19 +100,16 @@ func (v *Verifier) Ready(ctx context.Context) error {
 		return errors.New("invalid JWKS response size")
 	}
 	var keys struct {
-		Keys []struct {
-			Type      string `json:"kty"`
-			Algorithm string `json:"alg"`
-			Use       string `json:"use"`
-			Modulus   string `json:"n"`
-			Exponent  string `json:"e"`
-		} `json:"keys"`
+		Keys []json.RawMessage `json:"keys"`
 	}
 	if json.Unmarshal(body, &keys) != nil {
 		return errors.New("invalid JWKS response")
 	}
-	for _, key := range keys.Keys {
-		if key.Type != "RSA" {
+	for _, raw := range keys.Keys {
+		// A rotated key set can include algorithms this API does not support.
+		// Parse each key independently so one unusable key does not hide another.
+		var key jose.JSONWebKey
+		if json.Unmarshal(raw, &key) != nil || !key.Valid() {
 			continue
 		}
 		if key.Algorithm != "" && key.Algorithm != "RS256" {
@@ -120,9 +118,8 @@ func (v *Verifier) Ready(ctx context.Context) error {
 		if key.Use != "" && key.Use != "sig" {
 			continue
 		}
-		n, nErr := base64.RawURLEncoding.DecodeString(key.Modulus)
-		e, eErr := base64.RawURLEncoding.DecodeString(key.Exponent)
-		if nErr == nil && eErr == nil && len(n) >= 256 && len(e) > 0 {
+		public, ok := key.Key.(*rsa.PublicKey)
+		if ok && public.N.BitLen() >= 2048 {
 			return nil
 		}
 	}

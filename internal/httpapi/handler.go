@@ -18,6 +18,7 @@ import (
 	"github.com/cadmax/backend-challenge-go/internal/application"
 	"github.com/cadmax/backend-challenge-go/internal/auth"
 	"github.com/cadmax/backend-challenge-go/internal/domain"
+	"github.com/felixge/httpsnoop"
 )
 
 const maxBodyBytes = 32 << 10
@@ -383,7 +384,6 @@ func validCorrelationID(value string) bool {
 
 func (h *handler) observe(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		started := time.Now()
 		id := r.Header.Get("X-Correlation-ID")
 		if !validCorrelationID(id) {
 			id = rand.Text()
@@ -394,37 +394,13 @@ func (h *handler) observe(next http.Handler) http.Handler {
 		w.Header().Set("X-Correlation-ID", id)
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		recorder := &responseStatus{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(recorder, r)
+		response := httpsnoop.CaptureMetrics(next, w, r)
 		// Log only a route pattern; a raw URL or body can contain sensitive data.
 		h.options.Logger.InfoContext(ctx, "http request completed", "correlationId", id,
-			"method", r.Method, "route", r.Pattern, "status", recorder.status,
-			"durationMs", time.Since(started).Milliseconds())
+			"method", r.Method, "route", r.Pattern, "status", response.Code,
+			"durationMs", response.Duration.Milliseconds())
 	})
 }
-
-type responseStatus struct {
-	http.ResponseWriter
-	status  int
-	written bool
-}
-
-func (w *responseStatus) WriteHeader(status int) {
-	if !w.written {
-		w.status = status
-		w.written = true
-		w.ResponseWriter.WriteHeader(status)
-	}
-}
-
-func (w *responseStatus) Write(body []byte) (int, error) {
-	if !w.written {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.ResponseWriter.Write(body)
-}
-
-func (w *responseStatus) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 type errorResponse struct {
 	Code    string `json:"code"`

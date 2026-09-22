@@ -390,3 +390,75 @@ func TestRequestDeadlineReachesApplication(t *testing.T) {
 		t.Fatalf("deadline: code=%d calls=%d", w.Code, s.calls)
 	}
 }
+
+func TestRequestLogsCaptureResponseStatus(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		write func(http.ResponseWriter)
+		code  int
+	}{
+		{"implicit status", func(w http.ResponseWriter) { _, _ = w.Write([]byte("ok")) }, 200},
+		{"empty response", func(http.ResponseWriter) {}, 200},
+		{"explicit status", func(w http.ResponseWriter) { w.WriteHeader(http.StatusTeapot) }, 418},
+		{"first status wins", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusAccepted)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("accepted"))
+		}, 202},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			h := New(&fakeService{}, fakeVerifier{}, Options{
+				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+				Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					tt.write(w)
+				}),
+			})
+			w := request(h, "GET", "/metrics", "", "")
+			var entry struct {
+				Status        int    `json:"status"`
+				Method        string `json:"method"`
+				Route         string `json:"route"`
+				CorrelationID string `json:"correlationId"`
+			}
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != tt.code || entry.Status != tt.code {
+				t.Fatalf("response=%d, logged=%d, want=%d", w.Code, entry.Status, tt.code)
+			}
+			if entry.Method != "GET" || entry.Route != "GET /metrics" || entry.CorrelationID != w.Header().Get("X-Correlation-ID") {
+				t.Fatalf("unexpected request log: %+v", entry)
+			}
+		})
+	}
+}
+
+func TestRequestObservationPreservesResponseWriterCapabilities(t *testing.T) {
+	for _, canFlush := range []bool{true, false} {
+		recorder := httptest.NewRecorder()
+		var writer http.ResponseWriter = recorder
+		if !canFlush {
+			writer = struct{ http.ResponseWriter }{recorder}
+		}
+		h := New(&fakeService{}, fakeVerifier{}, Options{
+			Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				flusher, ok := w.(http.Flusher)
+				if ok != canFlush {
+					t.Fatalf("Flusher supported=%v, underlying=%v", ok, canFlush)
+				}
+				if _, ok := w.(http.Hijacker); ok {
+					t.Fatal("observation added an unsupported Hijacker interface")
+				}
+				if canFlush {
+					flusher.Flush()
+				}
+				_, _ = w.Write([]byte("metric 1\n"))
+			}),
+		})
+		h.ServeHTTP(writer, httptest.NewRequest("GET", "/metrics", nil))
+		if recorder.Flushed != canFlush || recorder.Body.String() != "metric 1\n" {
+			t.Fatalf("flushed=%v, body=%q", recorder.Flushed, recorder.Body.String())
+		}
+	}
+}
