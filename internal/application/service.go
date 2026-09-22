@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cadmax/backend-challenge-go/internal/domain"
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -52,23 +52,15 @@ func NewService(repository Repository, options ...Option) *Service {
 	return s
 }
 
-// NewID returns a random UUID without coupling the domain to a UUID library.
+// NewID creates the canonical UUID v4 used by persisted entities and events.
 func NewID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("operating system randomness unavailable")
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
+	return uuid.NewString()
 }
 
 func validUUID(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	_, err := hex.DecodeString(strings.ReplaceAll(value, "-", ""))
-	return err == nil
+	// Keep the HTTP contract in canonical hyphenated form; uuid.Validate also
+	// accepts compact hexadecimal, braces and URNs, which this API does not.
+	return len(value) == 36 && uuid.Validate(value) == nil
 }
 
 // PayloadHash hashes lexicographically ordered JSON object keys. Money has
