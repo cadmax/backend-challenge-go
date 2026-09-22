@@ -60,6 +60,42 @@ make down
 persistência de mensagens da AWS; as simulações de falha reiniciam os processos
 da aplicação, mantendo o broker em execução.
 
+## Testar e auditar com Postman — caminho recomendado
+
+A coleção é a forma mais prática de percorrer o fluxo completo e conferir suas
+garantias: **127 requests em 13 pastas**, com obtenção de tokens, criação de IDs e
+verificações de saldo, idempotência, ledger, reconciliação e eventos.
+
+Downloads diretos: [coleção JSON](https://raw.githubusercontent.com/cadmax/backend-challenge-go/main/postman/backend-challenge-go.postman_collection.json)
+e [ambiente local JSON](https://raw.githubusercontent.com/cadmax/backend-challenge-go/main/postman/backend-challenge-go.local.postman_environment.json).
+Importe os arquivos baixados ou cole essas URLs na opção **Import** do Postman.
+
+1. No checkout configurado acima, execute `make up-multi`. O fluxo completo usa
+   três APIs, nas portas `8080`, `8082` e `8083`, inclusive nos testes de concorrência.
+2. No Postman Desktop, use **Import** para importar os dois arquivos do repositório:
+   [coleção](postman/backend-challenge-go.postman_collection.json) e
+   [ambiente local](postman/backend-challenge-go.local.postman_environment.json).
+3. Selecione o ambiente **Backend Challenge Go — Local**. Se alterou portas no
+   `.env`, ajuste as URLs correspondentes nesse ambiente.
+4. Abra **Run** na coleção e execute uma iteração, mantendo todas as requests na
+   ordem das pastas, de **00** a **12**. Confira os resultados dos testes no Runner.
+
+As pastas separam saúde, OAuth, carteiras, apostas, idempotência, reversões,
+referências pendentes, autorização, validação, concorrência, SQS/outbox, DLQ e
+observabilidade. Respostas `400`, `401`, `403`, `404`, `409` e `422` são esperadas
+nos cenários negativos; os testes conferem cada resultado. O número de verificações
+pode variar porque os cenários assíncronos fazem polling limitado.
+
+Consulte o [guia da coleção](postman/README.md) para executar uma pasta ou request
+isolada, renovar tokens e inspecionar as evidências. As URLs das filas são resolvidas
+automaticamente, inclusive ao usar **Send** nas requests SQS e DLQ.
+
+O ledger e a reconciliação permitem auditar os movimentos de cada carteira; as
+métricas mostram o comportamento agregado dos processos. A coleção complementa
+`make integration`, que verifica quedas, recuperação e constraints diretamente no
+banco. Os exemplos com `curl` abaixo e os scripts `./scripts/token.sh` e
+`./scripts/smoke.sh` continuam disponíveis para uso pelo terminal.
+
 ## Autenticação
 
 O realm `jungle` já contém clientes confidenciais com `client_credentials`.
@@ -324,6 +360,13 @@ A migration é executada automaticamente antes da API. Aplicação manual:
 ```sh
 make migrate-up
 ```
+
+O executável usa `golang-migrate` para aplicar os arquivos versionados. Uma
+instalação existente é reconhecida sem recriar as tabelas financeiras. Se uma
+execução falhar e deixar a versão marcada como `dirty`, novas migrations param:
+inspecione o erro e o schema antes de corrigir a versão com a CLI oficial. A
+aplicação não executa `force` automaticamente. O procedimento e a compatibilidade
+dos metadados estão descritos em [ARCHITECTURE.md](ARCHITECTURE.md#migrations-e-atualização-de-instalações-existentes).
 
 A reversão remove as tabelas financeiras e seus dados. Pare todas as instâncias
 antes de executá-la; use somente no ambiente que pretende apagar:
