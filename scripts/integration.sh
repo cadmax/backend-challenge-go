@@ -4,6 +4,9 @@ export TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://wager_owner:wager-owner
 export OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://localhost:${KEYCLOAK_PORT:-8081}/realms/jungle}
 export OIDC_JWKS_URL=${OIDC_JWKS_URL:-$OIDC_ISSUER_URL/protocol/openid-connect/certs}
 export SQS_ENDPOINT=${SQS_ENDPOINT:-http://localhost:${LOCALSTACK_PORT:-4567}}
+export INTEGRATION_DATABASE_URL=${INTEGRATION_DATABASE_URL:-$TEST_DATABASE_URL}
+export INTEGRATION_OIDC_ISSUER_URL=${INTEGRATION_OIDC_ISSUER_URL:-$OIDC_ISSUER_URL}
+export INTEGRATION_SQS_ENDPOINT=${INTEGRATION_SQS_ENDPOINT:-$SQS_ENDPOINT}
 export AWS_REGION=us-east-1
 # The test harness provisions and tears down isolated queues; application Compose
 # containers use the scoped IAM identity instead of these local bootstrap credentials.

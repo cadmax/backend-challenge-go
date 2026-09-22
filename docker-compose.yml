@@ -2,7 +2,7 @@ name: jungle-wager
 
 x-app: &app
   image: jungle-wager:local
-  build: .
+  pull_policy: never
   init: true
   restart: unless-stopped
   read_only: true

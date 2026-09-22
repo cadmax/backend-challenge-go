@@ -5,5 +5,5 @@ case "${1:-app}" in
     *) echo 'Usage: broker-env.sh [app|ingress|events]' >&2; exit 2 ;;
 esac
 # The output is intended for eval in the caller shell and contains only local emulator credentials.
-docker compose exec -T localstack cat "/run/wager-aws/$identity.env" |
+docker compose exec -T --interactive=false localstack cat "/run/wager-aws/$identity.env" |
     sed 's/^/export /'
