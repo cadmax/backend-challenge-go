@@ -62,16 +62,32 @@ func TestMoneyRejectsInvalidExternalRepresentations(t *testing.T) {
 			t.Fatalf("expected overflow for %q, got %v", input, err)
 		}
 	}
-	for _, currency := range []string{"", "brl", " BRL", "XYZ", "JPY", "BR", "BRLL"} {
-		if _, err := domain.NewMoney("1", currency); !errors.Is(err, domain.ErrInvalidMoney) {
-			t.Fatalf("expected invalid currency %q, got %v", currency, err)
-		}
+}
+
+func TestMoneyConstructorsShareTheSameCurrencyRules(t *testing.T) {
+	constructors := []struct {
+		name   string
+		create func(string) (domain.Money, error)
+		units  int64
+	}{
+		{"external", func(currency string) (domain.Money, error) { return domain.NewMoney("1", currency) }, 100},
+		{"minor units", func(currency string) (domain.Money, error) { return domain.MoneyFromMinor(100, currency) }, 100},
+		{"zero", domain.Zero, 0},
 	}
-	for _, currency := range []string{"BRL", "USD", "EUR"} {
-		zero, err := domain.Zero(currency)
-		if err != nil || zero.MinorUnits() != 0 || zero.Currency() != currency {
-			t.Fatalf("currency-specific zero: %v %v", zero, err)
-		}
+	for _, constructor := range constructors {
+		t.Run(constructor.name, func(t *testing.T) {
+			for _, currency := range []string{"BRL", "USD", "EUR"} {
+				value, err := constructor.create(currency)
+				if err != nil || value.Currency() != currency || value.MinorUnits() != constructor.units || value.Validate() != nil {
+					t.Fatalf("valid currency %q: value=%v, err=%v", currency, value, err)
+				}
+			}
+			for _, currency := range []string{"", "brl", " BRL", "BRL ", "JPY", "XYZ", "BR", "BRLL"} {
+				if _, err := constructor.create(currency); !errors.Is(err, domain.ErrInvalidMoney) {
+					t.Fatalf("invalid currency %q: %v", currency, err)
+				}
+			}
+		})
 	}
 }
 

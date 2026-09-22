@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
+
+var supportedCurrencies = []string{"BRL", "USD", "EUR"}
 
 var (
 	ErrInvalidMoney     = errors.New("invalid money")
@@ -83,7 +86,7 @@ func (m Money) Validate() error {
 }
 
 func supportedCurrency(currency string) bool {
-	return currency == "BRL" || currency == "USD" || currency == "EUR"
+	return slices.Contains(supportedCurrencies, currency)
 }
 
 func (m Money) compatible(other Money) error {
