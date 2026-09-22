@@ -39,6 +39,63 @@ processo. `Repository.Within` cria uma transação `pgx.Tx` e passa a mesma
 `UnitOfWork` a todos os repositórios envolvidos. Erro no callback ou no commit
 aborta o conjunto. Cada chamada de I/O recebe contexto.
 
+## Bibliotecas para funções padronizadas
+
+Funções de infraestrutura usam bibliotecas mantidas e conhecidas. O código da
+aplicação concentra as políticas do desafio e a ligação entre esses componentes.
+
+| Função | Biblioteca | Responsabilidade delegada |
+| --- | --- | --- |
+| Identificadores | `github.com/google/uuid` | Geração de UUID v4 e validação do formato |
+| Configuração | `github.com/caarlos0/env/v11` | Parsing tipado de variáveis e valores padrão |
+| Métricas | `github.com/prometheus/client_golang` | Collectors, concorrência e exposição HTTP via `promhttp` |
+| Evolução do banco | `github.com/golang-migrate/migrate/v4` | Descoberta de arquivos, versões, dirty state e lock de deployment |
+| Chaves do IdP | `github.com/go-jose/go-jose/v4` | Decodificação e validação das JWKs |
+| Status e duração HTTP | `github.com/felixge/httpsnoop` | Instrumentação preservando as interfaces do `ResponseWriter` |
+
+OIDC, SQS, acesso ao banco e composição continuam usando `go-oidc`, AWS SDK v2,
+`pgx` e Fx. A biblioteca padrão atende HTTP, logs JSON, serialização, SHA-256,
+base64 e comparação de valores. O domínio mantém centavos em `int64`, validações
+de escala/moeda e limites aritméticos, como exigido pelo contrato financeiro.
+
+UUIDs gerados são v4 em formato canônico. A API recebe somente a representação
+hifenizada de 36 caracteres; essa restrição é aplicada antes de `uuid.Validate`,
+que também aceita outras representações em seu contrato geral.
+
+O atraso calculado a partir de uma tentativa persistida continua uma política
+determinística do serviço. A continuidade do trabalho pertence ao PostgreSQL;
+retries de transporte pertencem ao SDK AWS. Essa separação preserva o resultado
+em reentregas e reinícios.
+
+## Migrations e atualização de instalações existentes
+
+O executável `cmd/migrate` usa `golang-migrate` com os arquivos SQL embarcados
+pelo source `iofs` e o driver `pgx/v5`. Arquivos seguintes seguem a convenção
+`002_nome.up.sql` / `002_nome.down.sql`; `up` aplica as versões pendentes e `down`
+reverte todas as versões. Uma execução sem trabalho pendente é bem-sucedida.
+
+Cada arquivo é enviado inteiro ao PostgreSQL, com o modo multi-statement do
+driver desativado. O protocolo executa o conjunto numa transação implícita. As
+migrations devem manter essa propriedade: não introduzir `BEGIN`/`COMMIT`
+internos ou DDL não transacional sem rever a garantia e seus testes.
+
+A primeira execução após a troca da ferramenta reconhece o formato anterior de
+`schema_migrations`: converte `version` para `bigint` e acrescenta `dirty=false`,
+preservando a versão `1` já aplicada e `applied_at`. Não reaplica o schema
+financeiro nem modifica carteiras ou ledger. Versões legadas desconhecidas são
+recusadas para inspeção; não são consideradas aplicadas por suposição.
+
+O engine marca uma versão como `dirty` antes da execução e limpa essa marca ao
+terminar. Se houver falha ou confirmação ambígua, execuções seguintes param até
+uma inspeção operacional. Não existe `force` automático. É necessário verificar
+logs, SQL e estado real do schema antes de ajustar a versão com a CLI oficial;
+`force` altera somente os metadados e não executa nem desfaz comandos SQL.
+
+O engine não recebe `context.Context` em suas operações. Por isso a adaptação
+abre uma conexão exclusiva, usando a configuração do pool, e interrompe seu
+socket no cancelamento. A conexão pertence à migração; o pool recebido continua
+aberto. Essa ligação também cobre espera por advisory lock e cleanup de timeout.
+
 ## Dinheiro e agregados
 
 `Money` possui campos privados: `minor int64` e moeda. A persistência usa
@@ -151,7 +208,7 @@ timeout de 5 segundos, statement timeout de 10 segundos, lock timeout de
 ultrapasse timeout e desconexão não autorizam um débito parcial: há rollback e
 retry com a identidade original. Não existe loop ilimitado de retry dentro da
 requisição HTTP; o consumidor e os workers fazem novas tentativas duráveis.
-O lock único da migration coordena somente evolução de schema, fora do caminho
+Os locks de deployment das migrations coordenam somente evolução de schema, fora do caminho
 financeiro.
 
 ## Proteções no banco e ledger
@@ -442,6 +499,12 @@ coletados por instância; resultados contam atendimentos, inclusive replays,
 e não constituem o livro contábil. O worker de referências também observa
 os resultados depois do commit, por callback configurado na composição, sem
 introduzir dependência de métricas no domínio.
+
+Os collectors são `Counter`, `CounterVec`, `Gauge` e `Histogram` do cliente
+oficial Prometheus, com um registry próprio por instância e exposição via
+`promhttp.HandlerFor`. Contadores, sincronização e serialização não são
+implementados manualmente. Os valores `float64` exigidos por essa API representam
+somente telemetria, como duração em segundos; nenhum valor monetário passa por ela.
 
 Liveness mede o processo; readiness testa PostgreSQL e SQS. Chaves do IdP são
 validadas no startup, mas não em cada readiness. Um IdP temporariamente fora

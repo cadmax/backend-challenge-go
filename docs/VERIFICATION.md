@@ -24,6 +24,28 @@ PostgreSQL também executam; não são omitidos por ausência de configuração.
 A suíte de processos e indisponibilidade terminou em **57.864 segundos** nessa
 execução. O tempo depende da máquina, do estado das imagens e do broker.
 
+## Revalidação após adoção das bibliotecas
+
+UUID, configuração, Prometheus, migrations, JWKs e instrumentação HTTP passaram
+a usar bibliotecas específicas. Depois dessas trocas, a integração completa com
+`-race` passou novamente; a suíte distribuída terminou em **61.914 segundos**.
+`go test ./...`, `go vet ./...` e `govulncheck` também passaram.
+
+A imagem foi reconstruída e atualizada sobre o banco existente, sem `down` de
+migration nem reset de volume. Com as APIs temporariamente paradas, snapshots
+ordenados das tabelas financeiras e de mensageria foram comparados antes e depois
+do `migrate up`: conteúdo idêntico, incluindo **34 carteiras, 112 transações,
+87 lançamentos, 3 registros de inbox e 201 eventos de outbox**. O engine adotou
+`version=1, dirty=false` e as três APIs voltaram saudáveis.
+
+A [coleção versionada](../postman/backend-challenge-go.postman_collection.json)
+foi executada com o [ambiente local](../postman/backend-challenge-go.local.postman_environment.json)
+contra essa versão atualizada usando Newman 6.2.1. Foram **464 assertions, sem
+falhas**, em **43.574 segundos**. Houve 448 chamadas HTTP, incluindo disparos
+concorrentes, descoberta automática das filas e polling. Esses números variam
+com a quantidade de eventos pendentes e o tempo de processamento; a coleção
+contém 127 requests organizadas em 13 pastas.
+
 ## Evidência por garantia
 
 | Garantia | Verificação |
