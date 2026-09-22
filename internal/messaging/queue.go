@@ -23,14 +23,20 @@ type Queue struct {
 func NewQueue(cfg config.Config) (*Queue, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.AWSRegion), awsconfig.WithRetryMaxAttempts(2),
-		awsconfig.WithHTTPClient(&http.Client{Timeout: time.Duration(cfg.SQSWaitSeconds)*time.Second + 5*time.Second}))
+	awsConfig, err := awsconfig.LoadDefaultConfig(
+		ctx,
+		awsconfig.WithRegion(cfg.AWSRegion),
+		awsconfig.WithRetryMaxAttempts(2),
+		awsconfig.WithHTTPClient(&http.Client{
+			Timeout: time.Duration(cfg.SQSWaitSeconds)*time.Second + 5*time.Second,
+		}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
-	client := sqs.NewFromConfig(c, func(o *sqs.Options) {
+	client := sqs.NewFromConfig(awsConfig, func(options *sqs.Options) {
 		if cfg.SQSEndpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.SQSEndpoint)
+			options.BaseEndpoint = aws.String(cfg.SQSEndpoint)
 		}
 	})
 	return &Queue{Client: client, cfg: cfg}, nil
@@ -41,7 +47,9 @@ func (q *Queue) Initialize(ctx context.Context) error {
 		name   string
 		target *string
 	}{
-		{q.cfg.QueueName, &q.InputURL}, {q.cfg.EventQueueName, &q.EventURL}, {q.cfg.DLQName, &q.DLQURL},
+		{q.cfg.QueueName, &q.InputURL},
+		{q.cfg.EventQueueName, &q.EventURL},
+		{q.cfg.DLQName, &q.DLQURL},
 	} {
 		out, err := q.Client.GetQueueUrl(ctx, &sqs.GetQueueUrlInput{QueueName: aws.String(item.name)})
 		if err != nil {
@@ -57,7 +65,11 @@ func (q *Queue) Ready(ctx context.Context) error {
 		if url == "" {
 			return fmt.Errorf("queue not initialized")
 		}
-		if _, err := q.Client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{QueueUrl: aws.String(url), AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn}}); err != nil {
+		_, err := q.Client.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+			QueueUrl:       aws.String(url),
+			AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn},
+		})
+		if err != nil {
 			return err
 		}
 	}

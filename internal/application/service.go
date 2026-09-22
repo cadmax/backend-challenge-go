@@ -41,7 +41,11 @@ func WithReferencePolicy(maxAttempts int, ttl time.Duration) Option {
 }
 
 func NewService(repository Repository, options ...Option) *Service {
-	s := &Service{repository: repository, maxAttempts: 8, referenceTTL: 24 * time.Hour}
+	s := &Service{
+		repository:   repository,
+		maxAttempts:  8,
+		referenceTTL: 24 * time.Hour,
+	}
 	for _, option := range options {
 		option(s)
 	}
@@ -74,9 +78,14 @@ func PayloadHash(command Command) (string, error) {
 		return "", fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	payload := map[string]any{
-		"providerId": command.ProviderID, "externalTransactionId": command.ExternalTransactionID,
-		"playerId": strings.ToLower(command.PlayerID), "walletId": strings.ToLower(command.WalletID), "roundId": command.RoundID,
-		"gameId": command.GameID, "kind": command.Kind, "money": command.Money,
+		"providerId":                     command.ProviderID,
+		"externalTransactionId":          command.ExternalTransactionID,
+		"playerId":                       strings.ToLower(command.PlayerID),
+		"walletId":                       strings.ToLower(command.WalletID),
+		"roundId":                        command.RoundID,
+		"gameId":                         command.GameID,
+		"kind":                           command.Kind,
+		"money":                          command.Money,
 		"referenceExternalTransactionId": command.ReferenceExternalTransactionID,
 	}
 	b, err := json.Marshal(payload)
@@ -87,20 +96,40 @@ func PayloadHash(command Command) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-func input(command Command, hash string) domain.WagerInput {
-	return domain.WagerInput{ID: NewID(), ProviderID: command.ProviderID, ExternalTransactionID: command.ExternalTransactionID,
-		IdempotencyKey: command.IdempotencyKey, PayloadHash: hash, WalletID: command.WalletID, PlayerID: command.PlayerID,
-		RoundID: command.RoundID, GameID: command.GameID, Kind: domain.Kind(command.Kind), Money: command.Money,
-		ReferenceExternalTransactionID: command.ReferenceExternalTransactionID}
+func wagerInput(command Command, hash string) domain.WagerInput {
+	return domain.WagerInput{
+		ID:                             NewID(),
+		ProviderID:                     command.ProviderID,
+		ExternalTransactionID:          command.ExternalTransactionID,
+		IdempotencyKey:                 command.IdempotencyKey,
+		PayloadHash:                    hash,
+		WalletID:                       command.WalletID,
+		PlayerID:                       command.PlayerID,
+		RoundID:                        command.RoundID,
+		GameID:                         command.GameID,
+		Kind:                           domain.Kind(command.Kind),
+		Money:                          command.Money,
+		ReferenceExternalTransactionID: command.ReferenceExternalTransactionID,
+	}
 }
 
-func result(transaction domain.TransactionSnapshot, replay bool) Result {
-	return Result{TransactionID: transaction.ID, Status: string(transaction.Status), Balance: transaction.ResultBalance,
-		FailureCode: transaction.FailureCode, IdempotentReplay: replay}
+func transactionResult(transaction domain.TransactionSnapshot, replay bool) Result {
+	return Result{
+		TransactionID:    transaction.ID,
+		Status:           string(transaction.Status),
+		Balance:          transaction.ResultBalance,
+		FailureCode:      transaction.FailureCode,
+		IdempotentReplay: replay,
+	}
 }
 
 func walletView(wallet domain.WalletSnapshot) WalletView {
-	return WalletView{ID: wallet.ID, PlayerID: wallet.PlayerID, Balance: wallet.Balance, Version: wallet.Version}
+	return WalletView{
+		ID:       wallet.ID,
+		PlayerID: wallet.PlayerID,
+		Balance:  wallet.Balance,
+		Version:  wallet.Version,
+	}
 }
 
 func (s *Service) OpenWallet(ctx context.Context, playerID string, initial domain.Money, meta Metadata) (WalletView, error) {
@@ -116,36 +145,41 @@ func (s *Service) OpenWallet(ctx context.Context, playerID string, initial domai
 	if meta.CorrelationID == "" {
 		meta.CorrelationID = NewID()
 	}
-	err = s.repository.Within(ctx, func(u UnitOfWork) error {
-		if err := u.InsertWallet(ctx, wallet.Snapshot()); err != nil {
+	err = s.repository.Within(ctx, func(unitOfWork UnitOfWork) error {
+		if err := unitOfWork.InsertWallet(ctx, wallet.Snapshot()); err != nil {
 			return err
 		}
 		if initial.MinorUnits() == 0 {
 			return nil
 		}
-		tx, err := domain.NewOpeningTransaction(NewID(), wallet.Snapshot().ID, playerID, initial, now)
+		transaction, err := domain.NewOpeningTransaction(NewID(), wallet.Snapshot().ID, playerID, initial, now)
 		if err != nil {
 			return err
 		}
-		if err := tx.Process(initial, "", now); err != nil {
+		if err := transaction.Process(initial, "", now); err != nil {
 			return err
 		}
-		record := Record{Transaction: tx.Snapshot(), NextAttemptAt: now, ReferenceDeadline: now, Metadata: meta}
-		if err := u.InsertTransaction(ctx, record); err != nil {
+		record := Record{
+			Transaction:       transaction.Snapshot(),
+			NextAttemptAt:     now,
+			ReferenceDeadline: now,
+			Metadata:          meta,
+		}
+		if err := unitOfWork.InsertTransaction(ctx, record); err != nil {
 			return err
 		}
 		zero, _ := domain.Zero(initial.Currency())
-		entry, err := domain.NewLedgerEntry(NewID(), wallet.Snapshot().ID, tx.Snapshot().ID, domain.Credit, initial, zero, initial, now)
+		entry, err := domain.NewLedgerEntry(NewID(), wallet.Snapshot().ID, transaction.Snapshot().ID, domain.Credit, initial, zero, initial, now)
 		if err != nil {
 			return err
 		}
-		if err := insertLedger(ctx, u, entry.Snapshot(), 1); err != nil {
+		if err := insertLedger(ctx, unitOfWork, entry.Snapshot(), 1); err != nil {
 			return err
 		}
-		if err := processedEvent(ctx, u, record); err != nil {
+		if err := recordProcessedEvent(ctx, unitOfWork, record); err != nil {
 			return err
 		}
-		return balanceEvent(ctx, u, meta, entry.Snapshot(), 1)
+		return recordBalanceChangedEvent(ctx, unitOfWork, meta, entry.Snapshot(), 1)
 	})
 	return walletView(wallet.Snapshot()), err
 }
@@ -156,31 +190,36 @@ func (s *Service) GetWallet(ctx context.Context, id string) (WalletView, error) 
 	}
 	return s.repository.Wallet(ctx, id)
 }
+
 func (s *Service) Ledger(ctx context.Context, id, cursor string, limit int) (LedgerPage, error) {
 	if !validUUID(id) || limit < 1 || limit > 100 {
 		return LedgerPage{}, ErrInvalidInput
 	}
 	return s.repository.Ledger(ctx, id, cursor, limit)
 }
+
 func (s *Service) Reconcile(ctx context.Context, id string) (Reconciliation, error) {
 	if !validUUID(id) {
 		return Reconciliation{}, ErrInvalidInput
 	}
 	return s.repository.Reconcile(ctx, id)
 }
+
 func (s *Service) GetTransaction(ctx context.Context, provider, id string) (Result, error) {
 	if !validUUID(id) {
 		return Result{}, ErrInvalidInput
 	}
 	return s.repository.Transaction(ctx, provider, id, false)
 }
+
 func (s *Service) GetExternalTransaction(ctx context.Context, provider, id string) (Result, error) {
 	return s.repository.Transaction(ctx, provider, id, true)
 }
 
 func (s *Service) Process(ctx context.Context, command Command, meta Metadata) (Result, error) {
-	return s.process(ctx, command, meta, nil)
+	return s.processCommand(ctx, command, meta, nil)
 }
+
 func (s *Service) ProcessInbox(ctx context.Context, envelope Envelope, meta Metadata) (Result, error) {
 	if strings.TrimSpace(envelope.MessageID) == "" || len(envelope.MessageID) > 255 || envelope.Type != "WagerTransactionRequested" || envelope.OccurredAt.IsZero() {
 		return Result{}, fmt.Errorf("%w: invalid message envelope", ErrInvalidInput)
@@ -188,10 +227,10 @@ func (s *Service) ProcessInbox(ctx context.Context, envelope Envelope, meta Meta
 	if meta.CausationID == "" {
 		meta.CausationID = envelope.MessageID
 	}
-	return s.process(ctx, envelope.Data, meta, &envelope)
+	return s.processCommand(ctx, envelope.Data, meta, &envelope)
 }
 
-func (s *Service) process(ctx context.Context, command Command, meta Metadata, envelope *Envelope) (Result, error) {
+func (s *Service) processCommand(ctx context.Context, command Command, meta Metadata, envelope *Envelope) (Result, error) {
 	if !validUUID(command.WalletID) || !validUUID(command.PlayerID) {
 		return Result{}, fmt.Errorf("%w: walletId and playerId must be UUIDs", ErrInvalidInput)
 	}
@@ -206,7 +245,7 @@ func (s *Service) process(ctx context.Context, command Command, meta Metadata, e
 		return Result{}, err
 	}
 	now := time.Now().UTC()
-	tx, err := domain.NewWagerTransaction(input(command, hash), now)
+	transaction, err := domain.NewWagerTransaction(wagerInput(command, hash), now)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
@@ -214,7 +253,7 @@ func (s *Service) process(ctx context.Context, command Command, meta Metadata, e
 		meta.CorrelationID = NewID()
 	}
 	var output Result
-	err = s.repository.Within(ctx, func(u UnitOfWork) error {
+	err = s.repository.Within(ctx, func(unitOfWork UnitOfWork) error {
 		if envelope != nil {
 			// The inbox protects the complete normalized envelope, including its
 			// key and occurrence time; business idempotency deliberately does not.
@@ -223,23 +262,23 @@ func (s *Service) process(ctx context.Context, command Command, meta Metadata, e
 				return err
 			}
 			digest := sha256.Sum256(body)
-			entry, err := u.ClaimInbox(ctx, envelope.MessageID, hex.EncodeToString(digest[:]))
+			entry, err := unitOfWork.ClaimInbox(ctx, envelope.MessageID, hex.EncodeToString(digest[:]))
 			if err != nil {
 				return err
 			}
 			if entry != nil && entry.TransactionID != "" {
-				record, err := u.GetTransaction(ctx, entry.TransactionID)
+				record, err := unitOfWork.GetTransaction(ctx, entry.TransactionID)
 				if err != nil {
 					return err
 				}
-				output = result(record.Transaction, true)
+				output = transactionResult(record.Transaction, true)
 				return nil
 			}
 		}
-		if err := u.LockIdentity(ctx, command.ProviderID, command.IdempotencyKey, command.ExternalTransactionID); err != nil {
+		if err := unitOfWork.LockIdentity(ctx, command.ProviderID, command.IdempotencyKey, command.ExternalTransactionID); err != nil {
 			return err
 		}
-		record, keyHash, err := u.FindKey(ctx, command.ProviderID, command.IdempotencyKey)
+		record, keyHash, err := unitOfWork.FindKey(ctx, command.ProviderID, command.IdempotencyKey)
 		if err != nil {
 			return err
 		}
@@ -247,7 +286,7 @@ func (s *Service) process(ctx context.Context, command Command, meta Metadata, e
 			return ErrConflict
 		}
 		if record == nil {
-			record, err = u.FindExternal(ctx, command.ProviderID, command.ExternalTransactionID)
+			record, err = unitOfWork.FindExternal(ctx, command.ProviderID, command.ExternalTransactionID)
 			if err != nil {
 				return err
 			}
@@ -256,91 +295,73 @@ func (s *Service) process(ctx context.Context, command Command, meta Metadata, e
 			if record.Transaction.PayloadHash != hash {
 				return ErrConflict
 			}
-			if err := u.BindKey(ctx, command.ProviderID, command.IdempotencyKey, record.Transaction.ID, hash); err != nil {
+			if err := unitOfWork.BindKey(ctx, command.ProviderID, command.IdempotencyKey, record.Transaction.ID, hash); err != nil {
 				return err
 			}
-			output = result(record.Transaction, true)
+			output = transactionResult(record.Transaction, true)
 		} else {
-			record = &Record{Transaction: tx.Snapshot(), NextAttemptAt: now, ReferenceDeadline: now.Add(s.referenceTTL), Metadata: meta}
+			record = &Record{
+				Transaction:       transaction.Snapshot(),
+				NextAttemptAt:     now,
+				ReferenceDeadline: now.Add(s.referenceTTL),
+				Metadata:          meta,
+			}
 			// Lock the wallet before inserting its dependent transaction, so the
 			// foreign-key key-share locks cannot deadlock with FOR UPDATE.
-			wallet, err := u.GetWallet(ctx, command.WalletID)
+			wallet, err := unitOfWork.GetWallet(ctx, command.WalletID)
 			if err != nil {
 				return err
 			}
-			if err := u.InsertTransaction(ctx, *record); err != nil {
+			if err := unitOfWork.InsertTransaction(ctx, *record); err != nil {
 				return err
 			}
-			if err := u.BindKey(ctx, command.ProviderID, command.IdempotencyKey, tx.Snapshot().ID, hash); err != nil {
+			if err := unitOfWork.BindKey(ctx, command.ProviderID, command.IdempotencyKey, transaction.Snapshot().ID, hash); err != nil {
 				return err
 			}
-			if err := s.execute(ctx, u, record, wallet, now); err != nil {
+			if err := s.processLockedTransaction(ctx, unitOfWork, record, wallet); err != nil {
 				return err
 			}
-			output = result(record.Transaction, false)
+			output = transactionResult(record.Transaction, false)
 		}
 		if envelope != nil {
-			return u.CompleteInbox(ctx, envelope.MessageID, output.TransactionID)
+			return unitOfWork.CompleteInbox(ctx, envelope.MessageID, output.TransactionID)
 		}
 		return nil
 	})
 	return output, err
 }
 
-func (s *Service) execute(ctx context.Context, u UnitOfWork, record *Record, wallet *domain.Wallet, now time.Time) error {
+func (s *Service) processLockedTransaction(ctx context.Context, unitOfWork UnitOfWork, record *Record, wallet *domain.Wallet) error {
 	// Capture processing time after obtaining the wallet lock; a competing
 	// writer may have advanced its timestamp while this request was waiting.
-	now = time.Now().UTC()
-	tx, err := domain.RestoreWagerTransaction(record.Transaction)
+	now := time.Now().UTC()
+	transaction, err := domain.RestoreWagerTransaction(record.Transaction)
 	if err != nil {
 		return err
 	}
 	var reference *domain.TransactionSnapshot
 	alreadyReversed := false
 	if record.Transaction.ReferenceExternalTransactionID != "" {
-		ref, err := u.FindExternal(ctx, record.Transaction.ProviderID, record.Transaction.ReferenceExternalTransactionID)
+		ref, err := unitOfWork.FindExternal(ctx, record.Transaction.ProviderID, record.Transaction.ReferenceExternalTransactionID)
 		if err != nil {
 			return err
 		}
 		if ref != nil {
 			reference = &ref.Transaction
-			alreadyReversed, err = u.IsReversed(ctx, ref.Transaction.ID)
+			alreadyReversed, err = unitOfWork.IsReversed(ctx, ref.Transaction.ID)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	movement, err := tx.Evaluate(wallet.Snapshot(), reference, alreadyReversed)
+	movement, err := transaction.Evaluate(wallet.Snapshot(), reference, alreadyReversed)
 	if errors.Is(err, domain.ErrReferencePending) {
-		if record.ReferenceAttempts >= s.maxAttempts || !now.Before(record.ReferenceDeadline) {
-			return reject(ctx, u, record, tx, wallet.Snapshot().Balance, "REFERENCE_NOT_FOUND", now)
-		}
-		first := record.Transaction.Status == domain.Pending
-		if first {
-			if err := tx.AwaitReference(now); err != nil {
-				return err
-			}
-		}
-		record.ReferenceAttempts++
-		delay := time.Second * time.Duration(1<<min(record.ReferenceAttempts-1, 8))
-		record.NextAttemptAt = now.Add(delay)
-		record.Transaction = tx.Snapshot()
-		if err := u.SaveTransaction(ctx, *record); err != nil {
-			return err
-		}
-		if first {
-			event, err := domain.NewWagerTransactionPendingReference(eventMetadata(record.Metadata, now), record.Transaction)
-			if err != nil {
-				return err
-			}
-			return insertEvent(ctx, u, event)
-		}
-		return nil
+		return s.waitForReference(ctx, unitOfWork, record, transaction, wallet.Snapshot().Balance, now)
 	}
 	if err != nil {
 		var rule *domain.RuleError
 		if errors.As(err, &rule) {
-			return reject(ctx, u, record, tx, wallet.Snapshot().Balance, rule.Code, now)
+			return rejectTransaction(ctx, unitOfWork, record, transaction, wallet.Snapshot().Balance, rule.Code, now)
 		}
 		return err
 	}
@@ -352,50 +373,81 @@ func (s *Service) execute(ctx context.Context, u UnitOfWork, record *Record, wal
 		err = wallet.Credit(movement.Money, now)
 	}
 	if err != nil {
-		return reject(ctx, u, record, tx, before, "BALANCE_LIMIT_EXCEEDED", now)
+		return rejectTransaction(ctx, unitOfWork, record, transaction, before, "BALANCE_LIMIT_EXCEEDED", now)
 	}
 	referenceID := ""
 	if reference != nil {
 		referenceID = reference.ID
 	}
-	if err := tx.Process(wallet.Snapshot().Balance, referenceID, now); err != nil {
+	if err := transaction.Process(wallet.Snapshot().Balance, referenceID, now); err != nil {
 		return err
 	}
-	record.Transaction = tx.Snapshot()
-	if err := u.SaveTransaction(ctx, *record); err != nil {
+	record.Transaction = transaction.Snapshot()
+	if err := unitOfWork.SaveTransaction(ctx, *record); err != nil {
 		return err
 	}
 	if movement.Direction != "" {
-		if err := u.SaveWallet(ctx, wallet.Snapshot()); err != nil {
+		if err := persistBalanceChange(ctx, unitOfWork, *record, wallet.Snapshot(), movement, before, now); err != nil {
 			return err
 		}
-		entry, err := domain.NewLedgerEntry(NewID(), record.Transaction.WalletID, record.Transaction.ID, movement.Direction, movement.Money, before, wallet.Snapshot().Balance, now)
+	}
+	return recordProcessedEvent(ctx, unitOfWork, *record)
+}
+
+func (s *Service) waitForReference(ctx context.Context, unitOfWork UnitOfWork, record *Record, transaction *domain.WagerTransaction, balance domain.Money, now time.Time) error {
+	if record.ReferenceAttempts >= s.maxAttempts || !now.Before(record.ReferenceDeadline) {
+		return rejectTransaction(ctx, unitOfWork, record, transaction, balance, "REFERENCE_NOT_FOUND", now)
+	}
+	firstAttempt := record.Transaction.Status == domain.Pending
+	if firstAttempt {
+		if err := transaction.AwaitReference(now); err != nil {
+			return err
+		}
+	}
+	record.ReferenceAttempts++
+	delay := time.Second * time.Duration(1<<min(record.ReferenceAttempts-1, 8))
+	record.NextAttemptAt = now.Add(delay)
+	record.Transaction = transaction.Snapshot()
+	if err := unitOfWork.SaveTransaction(ctx, *record); err != nil {
+		return err
+	}
+	if firstAttempt {
+		event, err := domain.NewWagerTransactionPendingReference(eventMetadata(record.Metadata, now), record.Transaction)
 		if err != nil {
 			return err
 		}
-		if err := insertLedger(ctx, u, entry.Snapshot(), wallet.Snapshot().Version); err != nil {
-			return err
-		}
-		if err := balanceEvent(ctx, u, record.Metadata, entry.Snapshot(), wallet.Snapshot().Version); err != nil {
-			return err
-		}
+		return insertEvent(ctx, unitOfWork, event)
 	}
-	return processedEvent(ctx, u, *record)
+	return nil
 }
 
-func reject(ctx context.Context, u UnitOfWork, record *Record, tx *domain.WagerTransaction, balance domain.Money, code string, now time.Time) error {
-	if err := tx.Reject(code, &balance, now); err != nil {
+func persistBalanceChange(ctx context.Context, unitOfWork UnitOfWork, record Record, wallet domain.WalletSnapshot, movement domain.Movement, before domain.Money, now time.Time) error {
+	if err := unitOfWork.SaveWallet(ctx, wallet); err != nil {
 		return err
 	}
-	record.Transaction = tx.Snapshot()
-	if err := u.SaveTransaction(ctx, *record); err != nil {
+	entry, err := domain.NewLedgerEntry(NewID(), record.Transaction.WalletID, record.Transaction.ID, movement.Direction, movement.Money, before, wallet.Balance, now)
+	if err != nil {
+		return err
+	}
+	if err := insertLedger(ctx, unitOfWork, entry.Snapshot(), wallet.Version); err != nil {
+		return err
+	}
+	return recordBalanceChangedEvent(ctx, unitOfWork, record.Metadata, entry.Snapshot(), wallet.Version)
+}
+
+func rejectTransaction(ctx context.Context, unitOfWork UnitOfWork, record *Record, transaction *domain.WagerTransaction, balance domain.Money, code string, now time.Time) error {
+	if err := transaction.Reject(code, &balance, now); err != nil {
+		return err
+	}
+	record.Transaction = transaction.Snapshot()
+	if err := unitOfWork.SaveTransaction(ctx, *record); err != nil {
 		return err
 	}
 	event, err := domain.NewWagerTransactionRejected(eventMetadata(record.Metadata, now), record.Transaction)
 	if err != nil {
 		return err
 	}
-	return insertEvent(ctx, u, event)
+	return insertEvent(ctx, unitOfWork, event)
 }
 
 func (s *Service) ResumePending(ctx context.Context) (int, error) {
@@ -408,8 +460,8 @@ func (s *Service) ResumePending(ctx context.Context) (int, error) {
 		started := time.Now()
 		handled := false
 		var outcome Result
-		err = s.repository.Within(ctx, func(u UnitOfWork) error {
-			record, err := u.GetPendingTransaction(ctx, id)
+		err = s.repository.Within(ctx, func(unitOfWork UnitOfWork) error {
+			record, err := unitOfWork.GetPendingTransaction(ctx, id)
 			if err != nil {
 				return err
 			}
@@ -420,18 +472,18 @@ func (s *Service) ResumePending(ctx context.Context) (int, error) {
 			if (record.Transaction.Status != domain.Pending && record.Transaction.Status != domain.PendingReference) || record.NextAttemptAt.After(now) {
 				return nil
 			}
-			wallet, err := u.GetAvailableWallet(ctx, record.Transaction.WalletID)
+			wallet, err := unitOfWork.GetAvailableWallet(ctx, record.Transaction.WalletID)
 			if err != nil {
 				return err
 			}
 			if wallet == nil {
 				return nil
 			}
-			if err := s.execute(ctx, u, record, wallet, now); err != nil {
+			if err := s.processLockedTransaction(ctx, unitOfWork, record, wallet); err != nil {
 				return err
 			}
 			handled = true
-			outcome = result(record.Transaction, false)
+			outcome = transactionResult(record.Transaction, false)
 			return nil
 		})
 		if err != nil {
@@ -448,30 +500,53 @@ func (s *Service) ResumePending(ctx context.Context) (int, error) {
 }
 
 func eventMetadata(meta Metadata, now time.Time) domain.EventMetadata {
-	return domain.EventMetadata{EventID: NewID(), CorrelationID: meta.CorrelationID, CausationID: meta.CausationID, OccurredAt: now}
+	return domain.EventMetadata{
+		EventID:       NewID(),
+		CorrelationID: meta.CorrelationID,
+		CausationID:   meta.CausationID,
+		OccurredAt:    now,
+	}
 }
-func insertEvent(ctx context.Context, u UnitOfWork, event domain.Event) error {
+
+func insertEvent(ctx context.Context, unitOfWork UnitOfWork, event domain.Event) error {
 	body, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	return u.InsertEvent(ctx, Event{ID: event.ID(), AggregateID: event.AggregateID(), Type: event.Type(), OccurredAt: event.OccurredAt(), Payload: body})
+	return unitOfWork.InsertEvent(ctx, Event{
+		ID:          event.ID(),
+		AggregateID: event.AggregateID(),
+		Type:        event.Type(),
+		OccurredAt:  event.OccurredAt(),
+		Payload:     body,
+	})
 }
-func processedEvent(ctx context.Context, u UnitOfWork, record Record) error {
+
+func recordProcessedEvent(ctx context.Context, unitOfWork UnitOfWork, record Record) error {
 	event, err := domain.NewWagerTransactionProcessed(eventMetadata(record.Metadata, record.Transaction.UpdatedAt), record.Transaction)
 	if err != nil {
 		return err
 	}
-	return insertEvent(ctx, u, event)
+	return insertEvent(ctx, unitOfWork, event)
 }
-func balanceEvent(ctx context.Context, u UnitOfWork, meta Metadata, entry domain.LedgerSnapshot, version int64) error {
+
+func recordBalanceChangedEvent(ctx context.Context, unitOfWork UnitOfWork, meta Metadata, entry domain.LedgerSnapshot, version int64) error {
 	event, err := domain.NewWalletBalanceChanged(eventMetadata(meta, entry.CreatedAt), entry, version)
 	if err != nil {
 		return err
 	}
-	return insertEvent(ctx, u, event)
+	return insertEvent(ctx, unitOfWork, event)
 }
-func insertLedger(ctx context.Context, u UnitOfWork, entry domain.LedgerSnapshot, version int64) error {
-	return u.InsertLedger(ctx, LedgerView{ID: entry.ID, WalletID: entry.WalletID, TransactionID: entry.TransactionID,
-		Direction: string(entry.Direction), Money: entry.Money, BalanceBefore: entry.BalanceBefore, BalanceAfter: entry.BalanceAfter, CreatedAt: entry.CreatedAt}, version)
+
+func insertLedger(ctx context.Context, unitOfWork UnitOfWork, entry domain.LedgerSnapshot, version int64) error {
+	return unitOfWork.InsertLedger(ctx, LedgerView{
+		ID:            entry.ID,
+		WalletID:      entry.WalletID,
+		TransactionID: entry.TransactionID,
+		Direction:     string(entry.Direction),
+		Money:         entry.Money,
+		BalanceBefore: entry.BalanceBefore,
+		BalanceAfter:  entry.BalanceAfter,
+		CreatedAt:     entry.CreatedAt,
+	}, version)
 }

@@ -13,24 +13,41 @@ import (
 )
 
 func (s *Store) Wallet(ctx context.Context, id string) (application.WalletView, error) {
-	w, err := scanWallet(s.pool.QueryRow(ctx, `SELECT `+walletColumns+` FROM wallets WHERE id=$1`, id))
+	query := `SELECT ` + walletColumns + `
+		FROM wallets
+		WHERE id = $1`
+	wallet, err := scanWallet(s.pool.QueryRow(ctx, query, id))
 	if err != nil {
 		return application.WalletView{}, storageError(err)
 	}
-	snapshot := w.Snapshot()
-	return application.WalletView{ID: snapshot.ID, PlayerID: snapshot.PlayerID, Balance: snapshot.Balance, Version: snapshot.Version}, nil
+	snapshot := wallet.Snapshot()
+	return application.WalletView{
+		ID:       snapshot.ID,
+		PlayerID: snapshot.PlayerID,
+		Balance:  snapshot.Balance,
+		Version:  snapshot.Version,
+	}, nil
 }
 
 func (s *Store) Transaction(ctx context.Context, provider, id string, external bool) (application.Result, error) {
-	query := `SELECT ` + transactionColumns + ` FROM wager_transactions t WHERE provider_id=$1 AND id=$2`
+	query := `SELECT ` + transactionColumns + `
+		FROM wager_transactions t
+		WHERE provider_id = $1 AND id = $2`
 	if external {
-		query = `SELECT ` + transactionColumns + ` FROM wager_transactions t WHERE provider_id=$1 AND external_transaction_id=$2`
+		query = `SELECT ` + transactionColumns + `
+			FROM wager_transactions t
+			WHERE provider_id = $1 AND external_transaction_id = $2`
 	}
-	r, err := scanRecord(s.pool.QueryRow(ctx, query, provider, id))
+	record, err := scanRecord(s.pool.QueryRow(ctx, query, provider, id))
 	if err != nil {
 		return application.Result{}, storageError(err)
 	}
-	return application.Result{TransactionID: r.Transaction.ID, Status: string(r.Transaction.Status), Balance: r.Transaction.ResultBalance, FailureCode: r.Transaction.FailureCode}, nil
+	return application.Result{
+		TransactionID: record.Transaction.ID,
+		Status:        string(record.Transaction.Status),
+		Balance:       record.Transaction.ResultBalance,
+		FailureCode:   record.Transaction.FailureCode,
+	}, nil
 }
 
 type ledgerCursor struct {
@@ -44,13 +61,17 @@ func (s *Store) Ledger(ctx context.Context, id, encoded string, limit int) (appl
 	if _, err := s.Wallet(ctx, id); err != nil {
 		return page, err
 	}
-	cursor := ledgerCursor{WalletID: id, CreatedAt: time.Unix(0, 0).UTC(), ID: "00000000-0000-0000-0000-000000000000"}
+	cursor := ledgerCursor{
+		WalletID:  id,
+		CreatedAt: time.Unix(0, 0).UTC(),
+		ID:        "00000000-0000-0000-0000-000000000000",
+	}
 	if encoded != "" {
-		b, err := base64.RawURLEncoding.DecodeString(encoded)
+		cursorJSON, err := base64.RawURLEncoding.DecodeString(encoded)
 		if err != nil {
 			return page, application.ErrInvalidInput
 		}
-		if err := json.Unmarshal(b, &cursor); err != nil || cursor.WalletID != id || cursor.CreatedAt.IsZero() || len(cursor.ID) != 36 {
+		if err := json.Unmarshal(cursorJSON, &cursor); err != nil || cursor.WalletID != id || cursor.CreatedAt.IsZero() || len(cursor.ID) != 36 {
 			return page, application.ErrInvalidInput
 		}
 		var uuid pgtype.UUID
@@ -58,83 +79,120 @@ func (s *Store) Ledger(ctx context.Context, id, encoded string, limit int) (appl
 			return page, application.ErrInvalidInput
 		}
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id::text,wallet_id::text,transaction_id::text,direction,amount,currency,balance_before,balance_after,created_at
- FROM wallet_ledger WHERE wallet_id=$1 AND (created_at,id)>($2,$3::uuid) ORDER BY created_at,id LIMIT $4`, id, cursor.CreatedAt, cursor.ID, limit+1)
+	const query = `
+		SELECT id::text, wallet_id::text, transaction_id::text,
+			direction, amount, currency, balance_before, balance_after, created_at
+		FROM wallet_ledger
+		WHERE wallet_id = $1 AND (created_at, id) > ($2, $3::uuid)
+		ORDER BY created_at, id
+		LIMIT $4`
+	rows, err := s.pool.Query(ctx, query, id, cursor.CreatedAt, cursor.ID, limit+1)
 	if err != nil {
 		return page, storageError(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var e application.LedgerView
+		var entry application.LedgerView
 		var amount, before, after int64
 		var currency string
-		if err := rows.Scan(&e.ID, &e.WalletID, &e.TransactionID, &e.Direction, &amount, &currency, &before, &after, &e.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&entry.ID, &entry.WalletID, &entry.TransactionID,
+			&entry.Direction, &amount, &currency, &before, &after, &entry.CreatedAt,
+		); err != nil {
 			return page, storageError(err)
 		}
-		e.Money, err = domain.MoneyFromMinor(amount, currency)
+		entry.Money, err = domain.MoneyFromMinor(amount, currency)
 		if err != nil {
 			return page, err
 		}
-		e.BalanceBefore, err = domain.MoneyFromMinor(before, currency)
+		entry.BalanceBefore, err = domain.MoneyFromMinor(before, currency)
 		if err != nil {
 			return page, err
 		}
-		e.BalanceAfter, err = domain.MoneyFromMinor(after, currency)
+		entry.BalanceAfter, err = domain.MoneyFromMinor(after, currency)
 		if err != nil {
 			return page, err
 		}
-		page.Entries = append(page.Entries, e)
+		page.Entries = append(page.Entries, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return page, storageError(err)
 	}
 	if len(page.Entries) > limit {
 		last := page.Entries[limit-1]
-		b, err := json.Marshal(ledgerCursor{WalletID: id, CreatedAt: last.CreatedAt, ID: last.ID})
+		cursorJSON, err := json.Marshal(ledgerCursor{
+			WalletID:  id,
+			CreatedAt: last.CreatedAt,
+			ID:        last.ID,
+		})
 		if err != nil {
 			return page, err
 		}
-		page.NextCursor = base64.RawURLEncoding.EncodeToString(b)
+		page.NextCursor = base64.RawURLEncoding.EncodeToString(cursorJSON)
 		page.Entries = page.Entries[:limit]
 	}
 	return page, nil
 }
 
 func (s *Store) Reconcile(ctx context.Context, id string) (application.Reconciliation, error) {
-	var r application.Reconciliation
-	var currency, calculated string
-	var stored int64
+	var reconciliation application.Reconciliation
+	var currency, calculatedMinorUnits string
+	var storedMinorUnits int64
 	// One statement uses one MVCC snapshot even at READ COMMITTED.
-	err := s.pool.QueryRow(ctx, `SELECT w.id::text,w.currency,w.balance,
- coalesce(sum(CASE l.direction WHEN 'CREDIT' THEN l.amount::numeric ELSE -l.amount::numeric END),0)::text,count(l.id)
- FROM wallets w LEFT JOIN wallet_ledger l ON l.wallet_id=w.id WHERE w.id=$1 GROUP BY w.id`, id).Scan(&r.WalletID, &currency, &stored, &calculated, &r.CheckedEntries)
+	const query = `
+		SELECT w.id::text, w.currency, w.balance,
+			coalesce(sum(
+				CASE l.direction
+					WHEN 'CREDIT' THEN l.amount::numeric
+					ELSE -l.amount::numeric
+				END
+			), 0)::text,
+			count(l.id)
+		FROM wallets w
+		LEFT JOIN wallet_ledger l ON l.wallet_id = w.id
+		WHERE w.id = $1
+		GROUP BY w.id`
+	err := s.pool.QueryRow(ctx, query, id).Scan(
+		&reconciliation.WalletID,
+		&currency,
+		&storedMinorUnits,
+		&calculatedMinorUnits,
+		&reconciliation.CheckedEntries,
+	)
 	if err != nil {
-		return r, storageError(err)
+		return reconciliation, storageError(err)
 	}
-	r.StoredBalance, err = domain.MoneyFromMinor(stored, currency)
+	reconciliation.StoredBalance, err = domain.MoneyFromMinor(storedMinorUnits, currency)
 	if err != nil {
-		return r, err
+		return reconciliation, err
 	}
 	// PostgreSQL SUM(BIGINT) is numeric, so detect out-of-range corrupt data
 	// rather than overflowing an int64 accumulator during reconciliation.
-	var minor int64
-	if _, err = fmt.Sscan(calculated, &minor); err != nil {
-		return r, fmt.Errorf("ledger total is outside int64: %w", err)
+	var calculatedMinor int64
+	if _, err = fmt.Sscan(calculatedMinorUnits, &calculatedMinor); err != nil {
+		return reconciliation, fmt.Errorf("ledger total is outside int64: %w", err)
 	}
-	r.CalculatedBalance, err = domain.MoneyFromMinor(minor, currency)
+	reconciliation.CalculatedBalance, err = domain.MoneyFromMinor(calculatedMinor, currency)
 	if err != nil {
-		return r, err
+		return reconciliation, err
 	}
-	r.Difference, err = r.StoredBalance.Sub(r.CalculatedBalance)
+	reconciliation.Difference, err = reconciliation.StoredBalance.Sub(reconciliation.CalculatedBalance)
 	if err != nil {
-		return r, err
+		return reconciliation, err
 	}
-	r.Consistent = r.Difference.MinorUnits() == 0
-	return r, nil
+	reconciliation.Consistent = reconciliation.Difference.MinorUnits() == 0
+	return reconciliation, nil
 }
 
 func (s *Store) Pending(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text FROM wager_transactions WHERE status IN ('PENDING','PENDING_REFERENCE') AND next_attempt_at<=now() ORDER BY next_attempt_at,id LIMIT $1`, limit)
+	const query = `
+		SELECT id::text
+		FROM wager_transactions
+		WHERE status IN ('PENDING', 'PENDING_REFERENCE')
+		  AND next_attempt_at <= now()
+		ORDER BY next_attempt_at, id
+		LIMIT $1`
+	rows, err := s.pool.Query(ctx, query, limit)
 	if err != nil {
 		return nil, storageError(err)
 	}

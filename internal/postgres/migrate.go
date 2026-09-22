@@ -27,11 +27,16 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, direction string) error {
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(827364019)`); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+	const createMigrationTable = `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version integer PRIMARY KEY,
+			applied_at timestamptz NOT NULL DEFAULT now()
+		)`
+	if _, err = tx.Exec(ctx, createMigrationTable); err != nil {
 		return err
 	}
 	var applied bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=1)`).Scan(&applied); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 1)`).Scan(&applied); err != nil {
 		return err
 	}
 	if applied == (direction == "up") {
@@ -45,9 +50,9 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, direction string) error {
 		return fmt.Errorf("migration 001 %s: %w", direction, err)
 	}
 	if direction == "up" {
-		_, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES(1)`)
+		_, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES (1)`)
 	} else {
-		_, err = tx.Exec(ctx, `DELETE FROM schema_migrations WHERE version=1`)
+		_, err = tx.Exec(ctx, `DELETE FROM schema_migrations WHERE version = 1`)
 	}
 	if err != nil {
 		return err
